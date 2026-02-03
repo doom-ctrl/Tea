@@ -9,11 +9,236 @@ from typing import Optional, List, Dict, Tuple
 from urllib.parse import urlparse, parse_qs
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
+from datetime import datetime
 
 MAX_RETRIES = 3
 RETRY_DELAY = 2
 MAX_CONCURRENT_WORKERS = 5
 DEFAULT_CONCURRENT_WORKERS = 3
+
+
+def progress_hook(d):
+    """Progress hook for downloads with beautiful formatting"""
+    if d['status'] == 'downloading':
+        try:
+            percent = d.get('_percent_str', 'N/A').strip()
+            downloaded = d.get('_downloaded_bytes_str', '?')
+            total = d.get('_total_bytes_str', '?')
+            speed = d.get('_speed_str', 'N/A').strip()
+            eta = d.get('_eta_str', 'N/A').strip()
+            
+            bar_length = 30
+            if '_percent_str' in d:
+                try:
+                    percent_num = float(d['_percent_str'].strip('%'))
+                    filled = int(bar_length * percent_num / 100)
+                    bar = '#' * filled + '-' * (bar_length - filled)
+                except:
+                    bar = '-' * bar_length
+            else:
+                bar = '-' * bar_length
+            
+            print(f"\r  [{bar}] {percent} | {downloaded}/{total} | {speed} | ETA: {eta}", end='', flush=True)
+            
+        except Exception:
+            pass
+    
+    elif d['status'] == 'finished':
+        print()
+
+
+def get_config_path() -> str:
+    """Get path to config file"""
+    return os.path.join(os.path.dirname(__file__), 'tea-config.json')
+
+
+def load_config() -> Dict:
+    """Load configuration from file"""
+    config_path = get_config_path()
+    
+    default_config = {
+        'default_quality': '5',
+        'default_output': 'downloads',
+        'concurrent_downloads': 3,
+        'thumbnail_embed': True,
+        'split_enabled': False,
+        'mp3_quality': '320',
+        'duplicate_action': 'ask'
+    }
+    
+    try:
+        if os.path.exists(config_path):
+            with open(config_path, 'r', encoding='utf-8') as f:
+                user_config = json.load(f)
+                default_config.update(user_config)
+                return default_config
+        else:
+            save_config(default_config)
+            return default_config
+    except Exception as e:
+        print(f"[WARNING] Error loading config: {e}")
+        return default_config
+
+
+def save_config(config: Dict) -> None:
+    """Save configuration to file"""
+    config_path = get_config_path()
+    try:
+        with open(config_path, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2)
+        print(f"[OK] Config saved to: {config_path}")
+    except Exception as e:
+        print(f"[ERROR] Error saving config: {e}")
+
+
+def get_history_path() -> str:
+    """Get path to download history file"""
+    return os.path.join(os.path.dirname(__file__), 'tea-history.json')
+
+
+def load_history() -> Dict:
+    """Load download history"""
+    history_path = get_history_path()
+    
+    if os.path.exists(history_path):
+        try:
+            with open(history_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return {}
+    return {}
+
+
+def save_to_history(url: str, title: str, output_path: str) -> None:
+    """Save download to history"""
+    history = load_history()
+    
+    today = datetime.now().strftime('%Y-%m-%d')
+    
+    if today not in history:
+        history[today] = []
+    
+    history[today].append({
+        'url': url,
+        'title': title,
+        'output_path': output_path,
+        'timestamp': datetime.now().isoformat()
+    })
+    
+    try:
+        with open(get_history_path(), 'w', encoding='utf-8') as f:
+            json.dump(history, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[WARNING] Could not save to history: {e}")
+
+
+def is_already_downloaded(url: str) -> Tuple[bool, Optional[Dict]]:
+    """Check if URL was already downloaded"""
+    history = load_history()
+    
+    for date, downloads in history.items():
+        for download in downloads:
+            if download['url'] == url:
+                return True, download
+    return False, None
+
+
+def show_history() -> None:
+    """Display download history"""
+    history = load_history()
+    
+    if not history:
+        print("\n[INFO] No download history yet")
+        return
+    
+    print("\n[OK] Download History")
+    print("-" * 60)
+    
+    for date in sorted(history.keys(), reverse=True):
+        downloads = history[date]
+        print(f"\n[OK] {date} ({len(downloads)} downloads)")
+        for i, dl in enumerate(downloads, 1):
+            print(f"  {i}. {dl['title'][:60]}")
+            print(f"     URL: {dl['url']}")
+
+
+def remove_from_history(url: str) -> bool:
+    """
+    Remove a URL from download history
+    
+    Args:
+        url (str): URL to remove
+        
+    Returns:
+        bool: True if removed, False if not found
+    """
+    history = load_history()
+    found = False
+    
+    for date, downloads in history.items():
+        original_length = len(downloads)
+        history[date] = [d for d in downloads if d['url'] != url]
+        
+        if len(history[date]) < original_length:
+            found = True
+    
+    history = {date: downloads for date, downloads in history.items() if downloads}
+    
+    if found:
+        try:
+            with open(get_history_path(), 'w', encoding='utf-8') as f:
+                json.dump(history, f, indent=2, ensure_ascii=False)
+            return True
+        except Exception as e:
+            print(f"[WARNING] Error updating history: {e}")
+            return False
+    
+    return False
+
+
+def load_urls_from_file(filepath: str) -> List[str]:
+    """Load URLs from a text file (one URL per line)"""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        urls = []
+        for line in lines:
+            line = line.strip()
+            
+            if not line or line.startswith('#'):
+                continue
+            
+            if 'youtube.com' in line or 'youtu.be' in line:
+                urls.append(line)
+        
+        print(f"[OK] Loaded {len(urls)} URLs from {filepath}")
+        return urls
+        
+    except FileNotFoundError:
+        print(f"[ERROR] File not found: {filepath}")
+        return []
+    except Exception as e:
+        print(f"[ERROR] Error reading file: {e}")
+        return []
+
+
+def show_help():
+    """Show Tea help menu"""
+    print("\n[OK] Tea - YouTube Downloader")
+    print("-" * 60)
+    print("\nUsage:")
+    print("  tea                    # Interactive mode")
+    print("  tea --batch <file>     # Batch download from file")
+    print("  tea --config           # Update configuration")
+    print("  tea --history          # Show download history")
+    print("  tea --list-formats     # List available video formats")
+    print("  tea --help             # Show this help")
+    print("\nExamples:")
+    print("  tea")
+    print("  tea --batch urls.txt")
+    print("  tea --config")
+    print()
 
 
 def show_banner():
@@ -232,25 +457,219 @@ def load_timestamps_from_json(filepath: str) -> List[Dict]:
         return []
 
 
-def get_timestamps_interactive() -> List[Dict]:
-    """Get timestamps interactively from user"""
+def format_time(seconds: float) -> str:
+    """Format seconds to MM:SS or HH:MM:SS"""
+    if seconds < 0:
+        seconds = 0
+    
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    else:
+        return f"{minutes}:{secs:02d}"
+
+
+def extract_youtube_chapters(url: str) -> List[Dict]:
+    """
+    Extract timestamps from YouTube's auto-chapters or description
+    
+    Args:
+        url: YouTube video URL
+        
+    Returns:
+        List of timestamp dictionaries
+    """
+    print("\n[OK] Checking for YouTube chapters...")
+    
+    ydl_opts = {
+        'quiet': True,
+        'extract_flat': False,
+        'skip_download': True,
+        'no_warnings': True,
+    }
+    
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            
+            if not info:
+                print("[ERROR] Could not fetch video information")
+                return []
+            
+            chapters = info.get('chapters') or []
+            if chapters:
+                print(f"[OK] Found {len(chapters)} YouTube chapters!")
+                
+                timestamps = []
+                
+                for chapter in chapters:
+                    timestamps.append({
+                        'start': format_time(chapter['start_time']),
+                        'end': format_time(chapter['end_time']),
+                        'title': chapter['title']
+                    })
+                
+                return timestamps
+            
+            description = info.get('description', '')
+            duration = info.get('duration', 0)
+            
+            if description and duration:
+                print("[INFO] Searching video description for timestamps...")
+                parsed = parse_description_timestamps(description, duration)
+                
+                if parsed:
+                    print(f"[OK] Found {len(parsed)} timestamps in description!")
+                    return parsed
+            
+            print("[INFO] No chapters or timestamps found in this video")
+            return []
+            
+    except Exception as e:
+        print(f"[ERROR] Error extracting chapters: {e}")
+        return []
+
+
+def parse_description_timestamps(description: str, video_duration: float) -> List[Dict]:
+    """
+    Parse timestamps from video description
+    """
+    timestamps = []
+    lines = description.split('\n')
+    
+    patterns = [
+        r'(\d+:\d+(?::\d+)?)\s*[-–—]\s*(.+)',
+        r'\[(\d+:\d+(?::\d+)?)\]\s*(.+)',
+        r'\((\d+:\d+(?::\d+)?)\)\s*(.+)',
+        r'(\d+:\d+(?::\d+)?)\s+(.+)',
+    ]
+    
+    for line in lines:
+        line = line.strip()
+        
+        if not line or len(line) < 5:
+            continue
+        
+        for pattern in patterns:
+            match = re.search(pattern, line)
+            if match:
+                time_str = match.group(1).strip()
+                title = match.group(2).strip()
+                
+                if len(title) < 2 or title.lower().startswith(('http', 'www', 'channel')):
+                    continue
+                
+                time_parts = time_str.split(':')
+                try:
+                    if len(time_parts) == 2:
+                        seconds = int(time_parts[0]) * 60 + int(time_parts[1])
+                    elif len(time_parts) == 3:
+                        seconds = int(time_parts[0]) * 3600 + int(time_parts[1]) * 60 + int(time_parts[2])
+                    else:
+                        continue
+                    
+                    if seconds > video_duration:
+                        continue
+                    
+                    timestamps.append({
+                        'time': seconds,
+                        'time_str': time_str,
+                        'title': title[:100]
+                    })
+                    break
+                    
+                except (ValueError, IndexError):
+                    continue
+    
+    if not timestamps:
+        return []
+    
+    timestamps.sort(key=lambda x: x['time'])
+    
+    seen_times = set()
+    unique_timestamps = []
+    for ts in timestamps:
+        if ts['time'] not in seen_times:
+            seen_times.add(ts['time'])
+            unique_timestamps.append(ts)
+    
+    result = []
+    for i, ts in enumerate(unique_timestamps):
+        if i + 1 < len(unique_timestamps):
+            end_time = unique_timestamps[i + 1]['time']
+        else:
+            end_time = video_duration
+        
+        result.append({
+            'start': ts['time_str'],
+            'end': format_time(end_time),
+            'title': ts['title']
+        })
+    
+    return result
+
+
+def get_timestamps_interactive(url: str = "") -> List[Dict]:
+    """Get timestamps interactively from user with auto-detection support"""
     print("\n=== Enter timestamps to split the video")
     print("-" * 60)
     print("Supported formats:")
     print("   * Range: 0:00-5:30, 5:30-10:00")
     print("   * YouTube style: One timestamp per line (0:00 Intro)")
     print("   * JSON file: Load from timestamps.json")
+    print("   * YouTube Auto-Chapters: Extract from video")
     print()
     print("Choose input method:")
     print("   1. Manual entry (one by one)")
     print("   2. Paste timestamp list")
     print("   3. Load from JSON file")
-    print("   4. Skip splitting")
+    
+    if url:
+        print("   4. Auto-detect from YouTube")
+        print("   5. Skip splitting")
+        choice_range = "1-5"
+        default = "5"
+    else:
+        print("   4. Skip splitting")
+        choice_range = "1-4"
+        default = "4"
+    
     print()
     
-    choice = input("Enter choice (1-4, default=4): ").strip()
+    choice = input(f"Enter choice ({choice_range}, default={default}): ").strip()
     
-    if choice not in ['1', '2', '3']:
+    if url and choice == '4':
+        timestamps = extract_youtube_chapters(url)
+        
+        if timestamps:
+            print("\n[OK] Preview of detected timestamps:")
+            print("-" * 60)
+            
+            for i, ts in enumerate(timestamps[:10], 1):
+                duration_sec = time_to_seconds(ts['end']) - time_to_seconds(ts['start'])
+                print(f"  {i}. {ts['start']} -> {ts['end']} ({duration_sec}s): {ts['title'][:50]}")
+            
+            if len(timestamps) > 10:
+                print(f"  ... and {len(timestamps) - 10} more")
+            
+            print("-" * 60)
+            print(f"[OK] Total: {len(timestamps)} chapters detected")
+            print()
+            
+            use_these = input("Use these timestamps? (y/n, default=y): ").strip().lower()
+            if use_these != 'n':
+                return timestamps
+            else:
+                print("[INFO] Auto-detection cancelled")
+                return []
+        else:
+            print("\n[INFO] Tip: Try manual entry or paste timestamps")
+            return []
+    
+    if (choice == '5' and url) or (choice == '4' and not url) or choice not in ['1', '2', '3', '4']:
         return []
     
     timestamps = []
@@ -323,12 +742,13 @@ def get_timestamps_interactive() -> List[Dict]:
     return timestamps
 
 
-def split_video_by_timestamps(video_path: str, timestamps: List[Dict], output_dir: str, audio_only: bool = False) -> List[Dict]:
-    """Split a video file into multiple clips based on timestamps"""
+def split_video_by_timestamps(video_path: str, timestamps: List[Dict], output_dir: str, audio_only: bool = False, video_title: str = "") -> List[Dict]:
+    """Split a video file into multiple clips based on timestamps with enhanced metadata"""
     results = []
     os.makedirs(output_dir, exist_ok=True)
 
-    print(f"\n[OK] Splitting into {len(timestamps)} clips...")
+    total_clips = len(timestamps)
+    print(f"\n[OK] Splitting into {total_clips} clips...")
     print("-" * 60)
 
     for i, timestamp in enumerate(timestamps, 1):
@@ -339,13 +759,13 @@ def split_video_by_timestamps(video_path: str, timestamps: List[Dict], output_di
         safe_title = re.sub(r'[<>:"/\\|?*&]', '_', title)
         safe_title = safe_title.strip()[:100]
 
-        _, ext = os.path.splitext(video_path)
         if audio_only:
             output_path = os.path.join(output_dir, f"{i:02d}-{safe_title}.mp3")
         else:
+            _, ext = os.path.splitext(video_path)
             output_path = os.path.join(output_dir, f"{i:02d}-{safe_title}{ext}")
 
-        print(f"[OK] Clip {i}/{len(timestamps)}: {title}")
+        print(f"[OK] Clip {i}/{total_clips}: {title}")
         print(f"   Time: {start} -> {end}")
 
         try:
@@ -359,6 +779,10 @@ def split_video_by_timestamps(video_path: str, timestamps: List[Dict], output_di
                     '-acodec', 'libmp3lame',
                     '-q:a', '2',
                     '-avoid_negative_ts', '1',
+                    '-metadata', f'title={title}',
+                    '-metadata', f'track={i}/{total_clips}',
+                    '-metadata', f'album={video_title or "Tea Playlist"}',
+                    '-metadata', f'date={datetime.now().year}',
                     '-y',
                     output_path
                 ]
@@ -370,6 +794,8 @@ def split_video_by_timestamps(video_path: str, timestamps: List[Dict], output_di
                     '-to', end,
                     '-c', 'copy',
                     '-avoid_negative_ts', '1',
+                    '-metadata', f'title={title}',
+                    '-metadata', f'track={i}/{total_clips}',
                     '-y',
                     output_path
                 ]
@@ -582,12 +1008,22 @@ def download_single_video(url: str, output_path: str, thread_id: int = 0, audio_
     if audio_only:
         format_selector = 'bestaudio/best'
         file_extension = 'mp3'
-        postprocessors = [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }]
-        print(f"[Thread {thread_id}] Audio-only mode: Downloading MP3...")
+        postprocessors = [
+            {
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '320',
+            },
+            {
+                'key': 'EmbedThumbnail',
+                'already_have_thumbnail': False
+            },
+            {
+                'key': 'FFmpegMetadata',
+                'add_metadata': True
+            }
+        ]
+        print(f"[Thread {thread_id}] Audio-only mode: Downloading highest quality MP3 (320kbps) with album art...")
     else:
         format_selector = (
             'bestvideo[height<=1080]+bestaudio/best[height<=1080]/'
@@ -597,6 +1033,9 @@ def download_single_video(url: str, output_path: str, thread_id: int = 0, audio_
         postprocessors = [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4',
+        }, {
+            'key': 'FFmpegMetadata',
+            'add_metadata': True
         }]
 
     downloader_options = {
@@ -607,6 +1046,14 @@ def download_single_video(url: str, output_path: str, thread_id: int = 0, audio_
     # PLAYLIST FIX
     'noplaylist': False,
     'extract_flat': False,
+
+    # PROGRESS BAR
+    'progress_hooks': [progress_hook],
+
+    # THUMBNAIL & METADATA
+    'writethumbnail': True,
+    'embedthumbnail': True,
+    'addmetadata': True,
 
     # OUTPUT / POST
     'postprocessors': postprocessors,
@@ -677,6 +1124,7 @@ def download_single_video(url: str, output_path: str, thread_id: int = 0, audio_
                         'url': url,
                         'success': True,
                         'count': video_count,
+                        'title': title,
                         'message': f"[OK] [Thread {thread_id}] {content_type.title()} '{title}' download completed! ({video_count} {'MP3s' if audio_only else 'videos'}) Location: {output_path}"
                     }
                 else:
@@ -685,6 +1133,7 @@ def download_single_video(url: str, output_path: str, thread_id: int = 0, audio_
                         'url': url,
                         'success': True,
                         'count': 1,
+                        'title': title,
                         'message': f"[OK] [Thread {thread_id}] {'Audio' if audio_only else 'Video'} '{title}' download completed! Location: {output_path}"
                     }
 
@@ -772,6 +1221,10 @@ def download_youtube_content(urls: List[str], output_path: Optional[str] = None,
             result = future.result()
             results.append(result)
             print(result['message'])
+            
+            if result['success']:
+                title = result.get('title', 'Unknown')
+                save_to_history(result['url'], title, output_path)
 
     print("\n" + "=" * 60)
     print("DOWNLOAD SUMMARY")
@@ -797,9 +1250,93 @@ def download_youtube_content(urls: List[str], output_path: Optional[str] = None,
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == '--list-formats':
-        url = input("Enter the YouTube URL to list formats: ")
-        download_youtube_content([url], list_formats=True)
+    if len(sys.argv) > 1:
+        arg = sys.argv[1]
+        
+        if arg == '--help':
+            show_help()
+            exit(0)
+        
+        elif arg == '--list-formats':
+            url = input("Enter the YouTube URL to list formats: ")
+            download_youtube_content([url], list_formats=True)
+            exit(0)
+        
+        elif arg == '--batch':
+            if len(sys.argv) < 3:
+                print("[ERROR] Usage: tea --batch <file.txt>")
+                exit(1)
+            
+            batch_file = sys.argv[2]
+            show_banner()
+            
+            urls = load_urls_from_file(batch_file)
+            
+            if not urls:
+                print("[ERROR] No valid URLs found in file")
+                exit(1)
+            
+            print(f"\n[OK] Batch mode: {len(urls)} URLs loaded")
+            for i, url in enumerate(urls, 1):
+                print(f"  {i}. {url}")
+            
+            quality = select_quality()
+            audio_only = (quality == 'audio')
+            print(f"Selected: {'Audio only (MP3)' if audio_only else 'Video'}")
+            
+            output_dir = select_output_directory()
+            
+            max_workers = 1
+            if len(urls) > 1:
+                max_workers = select_concurrent()
+            
+            print(f"\n[OK] Brewing {len(urls)} video(s)...")
+            
+            if output_dir:
+                download_youtube_content(urls, output_dir, max_workers=max_workers, audio_only=audio_only)
+            else:
+                download_youtube_content(urls, max_workers=max_workers, audio_only=audio_only)
+            
+            exit(0)
+        
+        elif arg == '--config':
+            config = load_config()
+            print("\n[OK] Tea Configuration")
+            print("-" * 60)
+            print(f"Current settings:")
+            print(f"  1. Default quality: {config['default_quality']}")
+            print(f"  2. Default output: {config['default_output']}")
+            print(f"  3. Concurrent downloads: {config['concurrent_downloads']}")
+            print(f"  4. MP3 quality: {config['mp3_quality']}kbps")
+            
+            update = input("\nUpdate settings? (y/n, default=n): ").strip().lower()
+            
+            if update == 'y':
+                quality = input(f"Default quality (1-5, current={config['default_quality']}): ").strip()
+                if quality:
+                    config['default_quality'] = quality
+                
+                output = input(f"Default output directory (current={config['default_output']}): ").strip()
+                if output:
+                    config['default_output'] = output
+                
+                concurrent = input(f"Concurrent downloads (1-5, current={config['concurrent_downloads']}): ").strip()
+                if concurrent:
+                    config['concurrent_downloads'] = int(concurrent)
+                
+                save_config(config)
+            
+            exit(0)
+        
+        elif arg == '--history':
+            show_history()
+            exit(0)
+        
+        else:
+            print(f"[ERROR] Unknown argument: {arg}")
+            print("Use 'tea --help' for usage information")
+            exit(1)
+    
     else:
         show_banner()
 
@@ -833,6 +1370,75 @@ if __name__ == "__main__":
         for i, url in enumerate(urls, 1):
             print(f"   {i}. {url}")
 
+        config = load_config()
+        duplicate_action = config.get('duplicate_action', 'ask')
+
+        urls_to_download = []
+        skipped_urls = []
+
+        for url in urls:
+            already_downloaded, download_info = is_already_downloaded(url)
+            
+            if already_downloaded and download_info:
+                if duplicate_action == 'download':
+                    print(f"[INFO] Duplicate: {download_info['title'][:60]} (downloading again)")
+                    urls_to_download.append(url)
+                
+                elif duplicate_action == 'skip':
+                    print(f"[INFO] Duplicate: {download_info['title'][:60]} (skipped)")
+                    skipped_urls.append(url)
+                
+                else:
+                    print(f"\n[WARNING] Duplicate detected!")
+                    print(f"   Title: {download_info['title'][:60]}")
+                    print(f"   Downloaded: {download_info['timestamp'][:10]}")
+                    print(f"   Location: {download_info['output_path']}")
+                    print()
+                    print("   Choose action:")
+                    print("     1. Download again (create new copy)")
+                    print("     2. Skip this video")
+                    print("     3. Remove from history and download")
+                    print("     4. Always download duplicates")
+                    print("     5. Always skip duplicates")
+                    
+                    choice = input("   Enter choice (1-5, default=2): ").strip()
+                    
+                    if choice == '1':
+                        print("   [OK] Downloading again")
+                        urls_to_download.append(url)
+                    
+                    elif choice == '3':
+                        print("   [OK] Removing from history...")
+                        remove_from_history(url)
+                        urls_to_download.append(url)
+                    
+                    elif choice == '4':
+                        config['duplicate_action'] = 'download'
+                        save_config(config)
+                        print("   [OK] Config updated: always download duplicates")
+                        urls_to_download.append(url)
+                    
+                    elif choice == '5':
+                        config['duplicate_action'] = 'skip'
+                        save_config(config)
+                        print("   [OK] Config updated: always skip duplicates")
+                        skipped_urls.append(url)
+                    
+                    else:
+                        print("   [INFO] Skipped")
+                        skipped_urls.append(url)
+            else:
+                urls_to_download.append(url)
+
+        urls = urls_to_download
+
+        if not urls:
+            print("\n[ERROR] No videos to download (all were skipped)")
+            exit(0)
+
+        if skipped_urls:
+            print(f"\n[OK] Summary: {len(urls)} to download, {len(skipped_urls)} skipped")
+
         quality = select_quality()
 
         if quality == 'audio':
@@ -863,17 +1469,20 @@ if __name__ == "__main__":
             split_choice = input(split_prompt).strip().lower()
 
             if split_choice == 'y':
-                timestamps = get_timestamps_interactive()
+                timestamps = get_timestamps_interactive(url=urls[0])
 
                 if timestamps:
                     split_enabled = True
-                    print(f"\n{len(timestamps)} clips will be created after download")
-                    for i, ts in enumerate(timestamps, 1):
+                    print(f"\n[OK] {len(timestamps)} clips will be created after download")
+                    for i, ts in enumerate(timestamps[:5], 1):
                         duration_sec = time_to_seconds(ts['end']) - time_to_seconds(ts['start'])
-                        print(f"  {i}. {ts['start']} -> {ts['end']} ({duration_sec}s): {ts['title']}")
+                        print(f"  {i}. {ts['start']} -> {ts['end']} ({duration_sec}s): {ts['title'][:60]}")
+                    
+                    if len(timestamps) > 5:
+                        print(f"  ... and {len(timestamps) - 5} more")
         
         print()
-        print(f"Brewing {len(urls)} video(s)...")
+        print(f"[OK] Brewing {len(urls)} video(s)...")
         print()
 
         if output_dir:

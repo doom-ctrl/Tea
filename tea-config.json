@@ -1,0 +1,9 @@
+{
+  "default_quality": "2",
+  "default_output": "C:\\Users\\samoe\\Desktop\\music",
+  "concurrent_downloads": 3,
+  "thumbnail_embed": true,
+  "split_enabled": false,
+  "mp3_quality": "320",
+  "duplicate_action": "ask"
+}
