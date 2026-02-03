@@ -1,0 +1,16 @@
+{
+  "video_title": "A bossa nova playlist",
+  "video_url": "https://www.youtube.com/watch?v=I2LaN6BQj3E",
+  "clips": [
+    {
+      "start": "0:03",
+      "end": "1:54",
+      "title": "O barquinho - Charlie Byrd"
+    },
+    {
+      "start": "1:54",
+      "end": "5:46",
+      "title": "Enchanted Mirror - Luiz Bonfá"
+    }
+  ]
+}

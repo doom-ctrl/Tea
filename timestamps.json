@@ -1,0 +1,19 @@
+{
+  "clips": [
+    {
+      "start": "0:00",
+      "end": "1:00",
+      "title": "Intro"
+    },
+    {
+      "start": "1:00",
+      "end": "2:00",
+      "title": "Main Content"
+    },
+    {
+      "start": "2:00",
+      "end": "3:33",
+      "title": "Outro"
+    }
+  ]
+}
