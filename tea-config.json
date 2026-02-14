@@ -1,9 +1,17 @@
 {
-  "default_quality": "2",
+  "default_quality": "5",
   "default_output": "C:\\Users\\samoe\\Desktop\\music",
   "concurrent_downloads": 3,
   "thumbnail_embed": true,
   "split_enabled": false,
   "mp3_quality": "320",
-  "duplicate_action": "ask"
+  "duplicate_action": "ask",
+  "use_ai_filename_cleaning": false,
+  "openrouter_api_key": "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",
+  "search_max_results": 5,
+  "search_min_duration": 30,
+  "search_max_duration": 600,
+  "search_use_ai": true,
+  "search_fuzzy_threshold": 70,
+  "_version": "1.0.0"
 }

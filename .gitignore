@@ -14,6 +14,7 @@ downloads/
 *.mp3
 *.webm
 *.mkv
+tea-profiles.json
 
 # IDE
 .vscode/

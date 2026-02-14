@@ -18,6 +18,8 @@ try:
     from tea.downloader import DownloadService, DEFAULT_CONCURRENT_WORKERS
     from tea.timestamps import TimestampProcessor, time_to_seconds
     from tea.ffmpeg import FFmpegService
+    from tea.search import YouTubeSearchService
+    from tea.exceptions import TeaError, ValidationError, DownloadError, ConfigurationError
 except ImportError:
     # Fallback for development
     from tea.logger import setup_logger
@@ -27,6 +29,8 @@ except ImportError:
     from tea.downloader import DownloadService, DEFAULT_CONCURRENT_WORKERS
     from tea.timestamps import TimestampProcessor, time_to_seconds
     from tea.ffmpeg import FFmpegService
+    from tea.search import YouTubeSearchService
+    from tea.exceptions import TeaError, ValidationError, DownloadError, ConfigurationError
 
 # Import security utilities
 try:
@@ -69,16 +73,47 @@ try:
 except (ImportError, ValueError):
     FilenameCleaner = None
 
+# Try to import UX components
+try:
+    from tea.ux import ConfigEditor, QualitySelector
+except ImportError:
+    ConfigEditor = None
+    QualitySelector = None
+
 
 class CLI:
-    """Command-line interface for Tea YouTube Downloader."""
+    """Command-line interface for Tea YouTube Downloader.
+
+    This class handles all user interactions including:
+    - Main menu navigation
+    - URL input and validation
+    - Quality selection
+    - Batch file processing
+    - Search and download workflow
+    - Configuration editing
+
+    The CLI uses a service-oriented architecture with dependency injection
+    for modularity and testability.
+
+    Attributes:
+        _config: ConfigManager instance for configuration management
+        _history: HistoryManager instance for download tracking
+        _info: InfoExtractor instance for content information
+        _timestamps: TimestampProcessor instance for timestamp handling
+        _ffmpeg: FFmpegService instance for media processing
+        _search: YouTubeSearchService instance for search functionality
+        _downloader: DownloadService instance for download operations
+        _logger: Logger instance for logging
+    """
 
     def __init__(self, logger=None):
-        """
-        Initialize CLI.
+        """Initialize CLI with all required services.
 
         Args:
-            logger: Logger instance
+            logger: Optional logger instance. If None, creates a new logger.
+
+        Raises:
+            ConfigurationError: If configuration cannot be loaded
         """
         self._logger = logger or setup_logger()
         self._config = ConfigManager(logger=self._logger)
@@ -86,6 +121,10 @@ class CLI:
         self._info = InfoExtractor(logger=self._logger)
         self._timestamps = TimestampProcessor(logger=self._logger)
         self._ffmpeg = FFmpegService(logger=self._logger)
+        self._search = YouTubeSearchService(
+            config_manager=self._config,
+            logger=self._logger
+        )
         self._downloader = DownloadService(
             config_manager=self._config,
             history_manager=self._history,
@@ -114,6 +153,10 @@ class CLI:
             self._config_mode()
         elif arg == '--history':
             self._history_mode()
+        elif arg == '--search':
+            self._search_and_download_mode()
+        elif arg == '--search-file':
+            self._search_file_mode()
         else:
             print(f"[ERROR] Unknown argument: {arg}")
             print("Use 'tea --help' for usage information")
@@ -353,11 +396,15 @@ class CLI:
         print("  tea --config           # Update configuration")
         print("  tea --history          # Show download history")
         print("  tea --list-formats     # List available video formats")
+        print("  tea --search           # Search and download songs")
+        print("  tea --search-file <f>  # Search from song list file")
         print("  tea --help             # Show this help")
         print("\nExamples:")
         print("  tea")
         print("  tea --batch urls.txt")
         print("  tea --config")
+        print("  tea --search")
+        print("  tea --search-file songs.txt")
         print()
 
     def show_supported_formats(self) -> None:
@@ -416,66 +463,77 @@ class CLI:
     # Selection methods
 
     def _select_quality_audio_only(self) -> bool:
-        """Select quality and return whether audio-only was chosen."""
-        print("Select video quality:")
-        print("   1. Best available (1080p)")
-        print("   2. High (720p)")
-        print("   3. Medium (480p)")
-        print("   4. Low (360p)")
-        print("   5. Audio only (MP3)")
+        """Select quality with enhanced UX, return whether audio-only."""
+        if QualitySelector is None:
+            # Fallback to basic selection
+            print("Select video quality:")
+            print("   1. Best available (1080p)")
+            print("   2. High (720p)")
+            print("   3. Medium (480p)")
+            print("   4. Low (360p)")
+            print("   5. Audio only (MP3)")
 
-        while True:
-            choice = input("Enter choice (1-5, default=1): ").strip()
+            while True:
+                choice = input("Enter choice (1-5, default=1): ").strip()
 
-            if not choice:
-                return False
-
-            if validate_choice(choice, ['1', '2', '3', '4', '5']):
-                if choice == '5':
-                    print("Selected: Audio only (MP3)")
-                    return True
-                else:
-                    quality_labels = {
-                        '1': 'Best available (1080p)',
-                        '2': 'High (720p)',
-                        '3': 'Medium (480p)',
-                        '4': 'Low (360p)'
-                    }
-                    print(f"Selected: {quality_labels.get(choice, 'Best')}")
+                if not choice:
                     return False
-            else:
-                print("[WARNING] Invalid choice. Please enter 1-5")
 
-        return False
+                if validate_choice(choice, ['1', '2', '3', '4', '5']):
+                    if choice == '5':
+                        print("Selected: Audio only (MP3)")
+                        return True
+                    else:
+                        quality_labels = {
+                            '1': 'Best available (1080p)',
+                            '2': 'High (720p)',
+                            '3': 'Medium (480p)',
+                            '4': 'Low (360p)'
+                        }
+                        print(f"Selected: {quality_labels.get(choice, 'Best')}")
+                        return False
+                else:
+                    print("[WARNING] Invalid choice. Please enter 1-5")
+
+            return False
+
+        selector = QualitySelector(default_quality=self._config.default_quality)
+        choice = selector.display(show_current=self._config.default_quality)
+        return selector.is_audio_only(choice)
 
     def select_quality(self) -> str:
-        """Interactive quality selection."""
-        print("Select video quality:")
-        print("   1. Best available (1080p)")
-        print("   2. High (720p)")
-        print("   3. Medium (480p)")
-        print("   4. Low (360p)")
-        print("   5. Audio only (MP3)")
+        """Interactive quality selection with enhanced UX."""
+        if QualitySelector is None:
+            # Fallback to basic selection
+            print("Select video quality:")
+            print("   1. Best available (1080p)")
+            print("   2. High (720p)")
+            print("   3. Medium (480p)")
+            print("   4. Low (360p)")
+            print("   5. Audio only (MP3)")
 
-        while True:
-            choice = input("Enter choice (1-5, default=1): ").strip()
+            while True:
+                choice = input("Enter choice (1-5, default=1): ").strip()
 
-            if not choice:
-                return 'best'
+                if not choice:
+                    return 'best'
 
-            if validate_choice(choice, ['1', '2', '3', '4', '5']):
-                quality_map = {
-                    '1': 'best',
-                    '2': '720p',
-                    '3': '480p',
-                    '4': '360p',
-                    '5': 'audio'
-                }
-                return quality_map.get(choice, 'best')
-            else:
-                print("[WARNING] Invalid choice. Please enter 1-5")
+                if validate_choice(choice, ['1', '2', '3', '4', '5']):
+                    quality_map = {
+                        '1': 'best',
+                        '2': '720p',
+                        '3': '480p',
+                        '4': '360p',
+                        '5': 'audio'
+                    }
+                    return quality_map.get(choice, 'best')
+                else:
+                    print("[WARNING] Invalid choice. Please enter 1-5")
 
-        return 'best'
+            return 'best'
+
+        selector = QualitySelector(default_quality=self._config.default_quality)
+        return selector.display(show_current=self._config.default_quality)
 
     def _select_output_directory(self) -> str:
         """Select output directory."""
@@ -581,45 +639,13 @@ class CLI:
             self._downloader.download(urls, max_workers=max_workers, audio_only=audio_only, cleaner=cleaner)
 
     def _config_mode(self) -> None:
-        """Handle configuration mode."""
-        print("\n[OK] Tea Configuration")
-        print("-" * 60)
-        print(f"Current settings:")
-        print(f"  1. Default quality: {self._config.default_quality}")
-        print(f"  2. Default output: {self._config.default_output}")
-        print(f"  3. Concurrent downloads: {self._config.concurrent_downloads}")
-        print(f"  4. MP3 quality: {self._config.mp3_quality}kbps")
-        print(f"  5. AI filename cleaning: {self._config.use_ai_filename_cleaning}")
-        if self._config.use_ai_filename_cleaning:
-            api_key_status = 'Set' if self._config.openrouter_api_key else 'Not set'
-            print(f"  6. OpenRouter API key: {api_key_status}")
+        """Handle configuration mode with enhanced UX."""
+        if ConfigEditor is None:
+            print("[ERROR] UX module not available")
+            return
 
-        update = input("\nUpdate settings? (y/n, default=n): ").strip().lower()
-
-        if update == 'y':
-            quality = input(f"Default quality (1-5, current={self._config.default_quality}): ").strip()
-            if quality:
-                self._config.set('default_quality', quality, auto_save=False)
-
-            output = input(f"Default output directory (current={self._config.default_output}): ").strip()
-            if output:
-                self._config.set('default_output', output, auto_save=False)
-
-            concurrent = input(f"Concurrent downloads (1-5, current={self._config.concurrent_downloads}): ").strip()
-            if concurrent:
-                self._config.set('concurrent_downloads', int(concurrent), auto_save=False)
-
-            ai_cleaning = input("Enable AI filename cleaning (y/n): ").strip().lower()
-            if ai_cleaning == 'y':
-                self._config.set('use_ai_filename_cleaning', True, auto_save=False)
-                if not self._config.openrouter_api_key:
-                    api_key = input("Enter OpenRouter API key (free at https://openrouter.ai): ").strip()
-                    if api_key:
-                        self._config.set('openrouter_api_key', api_key, auto_save=False)
-            else:
-                self._config.set('use_ai_filename_cleaning', False, auto_save=False)
-
-            self._config.save()
+        editor = ConfigEditor(self._config, logger=self._logger)
+        editor.run()
 
     def _history_mode(self) -> None:
         """Handle history mode."""
@@ -630,57 +656,130 @@ class CLI:
         url = input("Enter the YouTube URL to list formats: ")
         self._downloader._list_formats(url)
 
+    def _search_and_download_mode(self) -> None:
+        """Handle interactive search and download mode."""
+        self.show_banner()
 
-# Convenience functions for backward compatibility
-def show_banner():
-    """Show banner (legacy function)."""
-    cli = CLI()
-    cli.show_banner()
+        print("\n[INFO] AI-Powered Song Search")
+        print("-" * 60)
+        print("Enter song names one per line. Press Enter twice when done.")
+        print()
 
+        songs = []
+        line_count = 1
+        while True:
+            line = input(f"   Song {line_count} (or press Enter to finish): ")
+            if line.strip() == "":
+                if line_count > 1:
+                    break
+                print("[INFO] Please enter at least one song name")
+                continue
+            songs.append(line.strip())
+            line_count += 1
 
-def show_help():
-    """Show help (legacy function)."""
-    cli = CLI()
-    cli.show_help()
+        if not songs:
+            print("[INFO] No songs entered. Exiting...")
+            return
 
+        self._process_search_results(songs)
 
-def show_supported_formats():
-    """Show supported formats (legacy function)."""
-    cli = CLI()
-    cli.show_supported_formats()
+    def _search_file_mode(self) -> None:
+        """Handle search from file mode."""
+        if len(sys.argv) < 3:
+            print("[ERROR] Usage: tea --search-file <file.txt>")
+            return
 
+        song_file = sys.argv[2]
+        self.show_banner()
 
-def get_urls_interactive() -> str:
-    """Get URLs interactively (legacy function)."""
-    cli = CLI()
-    return cli.get_urls_interactive()
+        songs = self._search.load_songs_from_file(song_file)
 
+        if not songs:
+            print("[ERROR] No songs found in file")
+            return
 
-def select_quality() -> str:
-    """Select quality (legacy function)."""
-    cli = CLI()
-    return cli.select_quality()
+        print(f"\n[OK] Search mode: {len(songs)} song(s) loaded")
+        for i, song in enumerate(songs, 1):
+            print(f"  {i}. {song}")
 
+        proceed = input("\nProceed with search? (y/n, default=y): ").strip().lower()
+        if proceed == 'n':
+            print("[INFO] Cancelled")
+            return
 
-def select_output_directory() -> str:
-    """Select output directory (legacy function)."""
-    cli = CLI()
-    return cli.select_output_directory()
+        self._process_search_results(songs)
 
+    def _process_search_results(self, songs: List[str]) -> None:
+        """
+        Process search results for multiple songs.
 
-def select_concurrent() -> int:
-    """Select concurrent workers (legacy function)."""
-    cli = CLI()
-    return cli.select_concurrent()
+        Args:
+            songs: List of song names to search for
+        """
+        urls_to_download = []
+        skipped_songs = []
 
+        print(f"\n{'=' * 60}")
+        print(f"Searching for {len(songs)} song(s)...")
+        print(f"{'=' * 60}\n")
 
-def load_urls_from_file(filepath: str) -> List[str]:
-    """Load URLs from file (legacy function)."""
-    cli = CLI()
-    return cli.load_urls_from_file(filepath)
+        for i, song in enumerate(songs, 1):
+            print(f"\n[{i}/{len(songs)}] Searching for: {song}")
 
+            selected_url = self._search.search_and_select(song)
 
-def parse_multiple_urls(input_string: str) -> List[str]:
-    """Parse multiple URLs (legacy function)."""
-    cli = CLI()
-    return cli.parse_multiple_urls(input_string)
+            if selected_url:
+                urls_to_download.append(selected_url)
+                print(f"[OK] Added to download queue")
+            else:
+                print(f"[INFO] Skipped: {song}")
+                skipped_songs.append(song)
+
+        # Download selected URLs
+        if urls_to_download:
+            print(f"\n{'=' * 60}")
+            print(f"[OK] {len(urls_to_download)} video(s) queued for download")
+            print(f"{'=' * 60}")
+
+            # Handle duplicates
+            urls_to_download = self._handle_duplicates(urls_to_download)
+
+            if urls_to_download:
+                # Get quality
+                audio_only = self._select_quality_audio_only()
+
+                # Get output directory
+                output_dir = self._select_output_directory()
+
+                # Get concurrent workers
+                max_workers = 1
+                if len(urls_to_download) > 1:
+                    max_workers = self._select_concurrent()
+
+                print()
+                print(f"[OK] Brewing {len(urls_to_download)} video(s)...")
+                print()
+
+                # Initialize AI cleaner if enabled
+                cleaner = self._init_ai_cleaner()
+
+                # Download
+                final_output_dir = output_dir if output_dir else 'downloads'
+                self._downloader.download(
+                    urls=urls_to_download,
+                    output_path=final_output_dir,
+                    max_workers=max_workers,
+                    audio_only=audio_only,
+                    cleaner=cleaner
+                )
+            else:
+                print("\n[INFO] No videos to download (all were duplicates)")
+        else:
+            print("\n[INFO] No videos selected for download")
+
+        # Show summary
+        print(f"\n{'=' * 60}")
+        print("SEARCH SUMMARY")
+        print(f"{'=' * 60}")
+        print(f"[OK] Downloads queued: {len(urls_to_download)}")
+        print(f"[INFO] Skipped: {len(skipped_songs)}")

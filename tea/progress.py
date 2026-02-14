@@ -34,6 +34,8 @@ class ProgressReporter:
             return self._report_downloading(d)
         elif d['status'] == 'finished':
             return self._report_finished(d)
+        elif d['status'] == 'postprocessing':
+            return self._report_postprocessing(d)
         elif d['status'] == 'error':
             return self._report_error(d)
 
@@ -86,6 +88,25 @@ class ProgressReporter:
 
         return {'status': 'downloading'}
 
+    def _report_postprocessing(self, d: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Show spinner during postprocessing.
+
+        Args:
+            d: Progress dictionary from yt-dlp
+
+        Returns:
+            Structured progress data
+        """
+        postprocessor = d.get('postprocessor', 'Processing')
+
+        if not hasattr(self, '_spinner'):
+            from tea.utils.spinner import Spinner
+            self._spinner = Spinner(f"[{postprocessor}]")
+            self._spinner.start()
+
+        return {'status': 'postprocessing', 'postprocessor': postprocessor}
+
     def _report_finished(self, d: Dict[str, Any]) -> Dict[str, Any]:
         """
         Report download finished.
@@ -98,6 +119,11 @@ class ProgressReporter:
         """
         # Print newline to finish the progress bar
         print()
+
+        # Stop postprocessing spinner if running
+        if hasattr(self, '_spinner') and self._spinner:
+            self._spinner.stop("[OK] Post-processing complete")
+            self._spinner = None
 
         return {
             'status': 'finished',
@@ -117,6 +143,11 @@ class ProgressReporter:
         """
         error = d.get('error', 'Unknown error')
 
+        # Stop postprocessing spinner if running
+        if hasattr(self, '_spinner') and self._spinner:
+            self._spinner.stop()
+            self._spinner = None
+
         if self._logger:
             self._logger.error(f"Download error: {error}")
 
@@ -128,6 +159,10 @@ class ProgressReporter:
     def reset(self) -> None:
         """Reset progress tracking state."""
         self._last_percent = -1
+        # Clean up spinner if exists
+        if hasattr(self, '_spinner') and self._spinner:
+            self._spinner.stop()
+            self._spinner = None
 
 
 # Convenience function for backward compatibility

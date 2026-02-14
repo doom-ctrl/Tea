@@ -211,43 +211,65 @@ class FFmpegService:
         total_clips: int
     ) -> subprocess.CompletedProcess:
         """Execute the FFmpeg split command."""
-        if audio_only:
-            cmd = [
-                'ffmpeg',
-                '-i', video_path,
-                '-ss', start,
-                '-to', end,
-                '-vn',
-                '-acodec', 'libmp3lame',
-                '-q:a', '2',
-                '-avoid_negative_ts', '1',
-                '-metadata', f'title={metadata_title}',
-                '-metadata', f'track={clip_num}/{total_clips}',
-                '-metadata', f'album={video_title}',
-                '-metadata', f'date={datetime.now().year}',
-                '-y',
-                output_path
-            ]
-        else:
-            cmd = [
-                'ffmpeg',
-                '-i', video_path,
-                '-ss', start,
-                '-to', end,
-                '-c', 'copy',
-                '-avoid_negative_ts', '1',
-                '-metadata', f'title={metadata_title}',
-                '-metadata', f'track={clip_num}/{total_clips}',
-                '-y',
-                output_path
-            ]
 
-        return subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True
-        )
+        # Import and start spinner
+        try:
+            from tea.utils.spinner import Spinner
+            spinner = Spinner(f"[Clip {clip_num}/{total_clips}] Splitting")
+            spinner.start()
+        except ImportError:
+            spinner = None
+
+        try:
+            if audio_only:
+                cmd = [
+                    'ffmpeg',
+                    '-i', video_path,
+                    '-ss', start,
+                    '-to', end,
+                    '-vn',
+                    '-acodec', 'libmp3lame',
+                    '-q:a', '2',
+                    '-avoid_negative_ts', '1',
+                    '-metadata', f'title={metadata_title}',
+                    '-metadata', f'track={clip_num}/{total_clips}',
+                    '-metadata', f'album={video_title}',
+                    '-metadata', f'date={datetime.now().year}',
+                    '-y',
+                    output_path
+                ]
+            else:
+                cmd = [
+                    'ffmpeg',
+                    '-i', video_path,
+                    '-ss', start,
+                    '-to', end,
+                    '-c', 'copy',
+                    '-avoid_negative_ts', '1',
+                    '-metadata', f'title={metadata_title}',
+                    '-metadata', f'track={clip_num}/{total_clips}',
+                    '-y',
+                    output_path
+                ]
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+
+            # Stop spinner on success
+            if spinner:
+                spinner.stop()
+
+            return result
+
+        except subprocess.CalledProcessError:
+            # Stop spinner on error
+            if spinner:
+                spinner.stop()
+            raise
 
     def find_downloaded_video(
         self,

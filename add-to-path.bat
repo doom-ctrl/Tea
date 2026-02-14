@@ -1,6 +1,6 @@
 @echo off
 echo Adding Tea to PATH...
-setx PATH "C:\Users\samoe\desktop\Download-Simply-Videos-From-YouTube;%PATH%"
+setx PATH "C:\Users\samoe\Desktop\Tea;%PATH%"
 echo.
 echo ✅ Tea has been added to your PATH!
 echo.

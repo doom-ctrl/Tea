@@ -19,15 +19,32 @@ def get_history_path() -> str:
 
 
 class HistoryManager:
-    """Manages download history tracking."""
+    """Manages download history tracking and storage.
+
+    This class handles all history operations including:
+    - Loading history from JSON file
+    - Saving history to JSON file
+    - Adding new download entries
+    - Checking if URL is already downloaded
+    - Getting history statistics
+    - Retrieving recent downloads
+    - Filtering downloads by type
+
+    History is stored in tea-history.json in the project directory,
+    organized by date with each date containing a list of downloads.
+
+    Attributes:
+        _history_path: Path to history file
+        _history: In-memory history dictionary
+        _logger: Logger instance for logging
+    """
 
     def __init__(self, history_path: Optional[str] = None, logger=None):
-        """
-        Initialize HistoryManager.
+        """Initialize HistoryManager with optional custom history path.
 
         Args:
-            history_path: Path to history file (default: auto-detect)
-            logger: Logger instance for logging
+            history_path: Path to history file. If None, uses default location.
+            logger: Optional logger instance for logging operations.
         """
         self._history_path = history_path or get_history_path()
         self._logger = logger

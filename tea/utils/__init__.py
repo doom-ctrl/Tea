@@ -17,6 +17,7 @@ from .security import (
     validate_choice,
     SecurityValidationError
 )
+from .spinner import Spinner
 
 __all__ = [
     'validate_file_path',
@@ -29,5 +30,6 @@ __all__ = [
     'validate_concurrent_workers',
     'sanitize_clip_title',
     'validate_choice',
-    'SecurityValidationError'
+    'SecurityValidationError',
+    'Spinner'
 ]

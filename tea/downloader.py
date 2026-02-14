@@ -20,6 +20,14 @@ try:
     from tea.ffmpeg import FFmpegService
     from tea.timestamps import TimestampProcessor
     from tea.logger import setup_logger
+    from tea.exceptions import DownloadError, ValidationError, FFmpegError, ConfigurationError
+    from tea.constants import (
+        MAX_RETRIES,
+        RETRY_DELAY,
+        MAX_CONCURRENT_WORKERS,
+        DEFAULT_CONCURRENT_WORKERS,
+        YTDLP_OPTIONS,
+    )
 except ImportError:
     # Fallback for development
     from tea.config import ConfigManager
@@ -29,16 +37,40 @@ except ImportError:
     from tea.ffmpeg import FFmpegService
     from tea.timestamps import TimestampProcessor
     from tea.logger import setup_logger
-
-# Constants
-MAX_RETRIES = 3
-RETRY_DELAY = 2
-MAX_CONCURRENT_WORKERS = 5
-DEFAULT_CONCURRENT_WORKERS = 3
+    from tea.exceptions import DownloadError, ValidationError, FFmpegError, ConfigurationError
+    from tea.constants import (
+        MAX_RETRIES,
+        RETRY_DELAY,
+        MAX_CONCURRENT_WORKERS,
+        DEFAULT_CONCURRENT_WORKERS,
+        YTDLP_OPTIONS,
+    )
 
 
 class DownloadService:
-    """Handles YouTube content downloads."""
+    """Service for handling YouTube content downloads.
+
+    This service orchestrates the download of YouTube videos, playlists, and channels.
+    It manages:
+    - Single and batch downloads with concurrent worker support
+    - Retry logic with exponential backoff
+    - Progress reporting and logging
+    - History tracking integration
+    - Audio-only (MP3) and video downloads
+    - AI-powered filename cleaning
+
+    The service uses dependency injection for all components, making it
+    easily testable and modular.
+
+    Attributes:
+        _config: ConfigManager instance for configuration
+        _history: HistoryManager instance for download tracking
+        _info: InfoExtractor instance for content info extraction
+        _progress: ProgressReporter instance for progress updates
+        _ffmpeg: FFmpegService instance for media processing
+        _timestamps: TimestampProcessor instance for timestamp handling
+        _logger: Logger instance for logging
+    """
 
     def __init__(
         self,
@@ -50,17 +82,16 @@ class DownloadService:
         timestamp_processor: Optional[TimestampProcessor] = None,
         logger=None
     ):
-        """
-        Initialize DownloadService.
+        """Initialize DownloadService with dependency injection.
 
         Args:
-            config_manager: Configuration manager instance
-            history_manager: History manager instance
-            info_extractor: Info extractor instance
-            progress_reporter: Progress reporter instance
-            ffmpeg_service: FFmpeg service instance
-            timestamp_processor: Timestamp processor instance
-            logger: Logger instance
+            config_manager: Configuration manager instance. If None, creates default.
+            history_manager: History manager instance. If None, creates default.
+            info_extractor: Info extractor instance. If None, creates default.
+            progress_reporter: Progress reporter instance. If None, creates default.
+            ffmpeg_service: FFmpeg service instance. If None, creates default.
+            timestamp_processor: Timestamp processor instance. If None, creates default.
+            logger: Logger instance for logging. If None, creates default.
         """
         self._config = config_manager or ConfigManager(logger=logger)
         self._history = history_manager or HistoryManager(logger=logger)
@@ -249,19 +280,20 @@ class DownloadService:
                     print(error_msg)
                     time.sleep(retry_delay)
                 else:
-                    return {
-                        'url': url,
-                        'success': False,
-                        'count': 0,
-                        'message': f"[ERROR] [Thread {thread_id}] Failed after {MAX_RETRIES} attempts. Last error: {str(last_exception)}"
-                    }
+                    # All retries exhausted - raise DownloadError
+                    raise DownloadError(
+                        message=f"Failed after {MAX_RETRIES} attempts",
+                        url=url,
+                        retry_count=MAX_RETRIES,
+                        details={"last_error": str(last_exception)},
+                    )
 
-        return {
-            'url': url,
-            'success': False,
-            'count': 0,
-            'message': f"[ERROR] [Thread {thread_id}] Unexpected error: {str(last_exception)}"
-        }
+        # Fallback for unexpected exit
+        raise DownloadError(
+            message="Unexpected error in download logic",
+            url=url,
+            details={"error": str(last_exception)},
+        )
 
     def download(
         self,
@@ -282,7 +314,18 @@ class DownloadService:
             max_workers: Maximum number of concurrent downloads (1-5)
             audio_only: If True, download audio only in MP3 format
             cleaner: Optional AI filename cleaner instance
+
+        Raises:
+            ValidationError: If max_workers is not between 1 and MAX_CONCURRENT_WORKERS
         """
+        # Validate max_workers
+        if not 1 <= max_workers <= MAX_CONCURRENT_WORKERS:
+            raise ValidationError(
+                f"max_workers must be between 1 and {MAX_CONCURRENT_WORKERS}",
+                field="max_workers",
+                value=max_workers,
+            )
+
         if output_path is None:
             output_path = os.path.join(os.getcwd(), 'downloads')
 
